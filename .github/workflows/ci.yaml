@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '0 5 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - erlang_otp: '29.0'
+            elixir: 'main'
+          - erlang_otp: '29.0'
+            elixir: '1.20.2'
+            check: true
+          - erlang_otp: '28.5'
+            elixir: '1.19.5'
+          - erlang_otp: '27.3.4.11'
+            elixir: '1.18.4'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.erlang_otp }}
+          elixir-version: ${{ matrix.elixir }}
+          version-type: strict
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix deps.get
+      - name: Check unused dependencies
+        run: mix deps.unlock --check-unused
+        if: matrix.check
+      - name: Check code format
+        run: mix format --check-formatted
+        if: matrix.check
+      - name: Check compilation warnings
+        run: mix compile --warnings-as-errors
+        if: matrix.check
+      - name: Run tests
+        run: mix test
