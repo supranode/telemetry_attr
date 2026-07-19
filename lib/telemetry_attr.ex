@@ -59,7 +59,7 @@ defmodule TelemetryAttr do
       conflict with `:metadata`, `:args`, or `:vars`. Defaults to
       `:result`.
 
-  ## Behaviour with rescue, catch, and after
+  ## Behaviour with `rescue`, `catch`, and `after`
 
   When the function has `rescue`, `catch`, or `after` clauses, the entire body
   is wrapped in a `try` inside the span. This means:
@@ -71,7 +71,7 @@ defmodule TelemetryAttr do
     (not `:exception`). Only unhandled exceptions produce an
     `:exception` event.
 
-  ## Limitation: :vars with rescue/catch
+  ## Limitation: `:vars` with `rescue/catch`
 
   Variables listed in `:vars` must be bound in the `do` block and accessible
   after the `try` expression. Since Elixir does not leak variables from `try`
