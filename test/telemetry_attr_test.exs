@@ -64,6 +64,18 @@ defmodule TelemetryAttrTest do
     catch
       _ -> :caught
     end
+
+    @telemetry span: [:with_metadata], metadata: %{meta: true, version: "1.0"}
+    def with_metadata, do: :ok
+
+    @telemetry span: [:with_metadata_and_raise], metadata: %{meta: true}
+    def with_metadata_and_raise, do: raise("oops")
+
+    @telemetry span: [:with_result_key], vars: [:result], result_key: :my_result
+    def with_result_key do
+      result = 42
+      {:ok, result}
+    end
   end
 
   test "emits :start and :stop events, including :result in :stop metadata" do
@@ -175,6 +187,31 @@ defmodule TelemetryAttrTest do
     refute_received {[:with_catch, :exception], _, _, _}
   end
 
+  test "includes :metadata in :start, :stop, and :exception event metadata" do
+    telemetry_attach(span: [:with_metadata])
+
+    assert Samples.with_metadata() == :ok
+
+    assert_received {[:with_metadata, :start], _, %{meta: true, version: "1.0"}, 0}
+    assert_received {[:with_metadata, :stop], _, %{meta: true, version: "1.0", result: :ok}, 1}
+
+    telemetry_attach(span: [:with_metadata_and_raise])
+
+    assert_raise RuntimeError, "oops", fn -> Samples.with_metadata_and_raise() end
+
+    assert_received {[:with_metadata_and_raise, :start], _, %{meta: true}, 2}
+    assert_received {[:with_metadata_and_raise, :exception], _, %{meta: true}, 3}
+  end
+
+  test "accepts a :result_key to customize the result key in :stop metadata" do
+    telemetry_attach(span: [:with_result_key])
+
+    assert Samples.with_result_key() == {:ok, 42}
+
+    assert_received {[:with_result_key, :start], _, %{}, 0}
+    assert_received {[:with_result_key, :stop], _, %{result: 42, my_result: {:ok, 42}}, 1}
+  end
+
   test "raises a CompileError when :span is missing" do
     assert_raise CompileError, "@telemetry :span is required", fn ->
       Code.compile_string("""
@@ -182,20 +219,20 @@ defmodule TelemetryAttrTest do
         use TelemetryAttr
 
         @telemetry []
-        def missing_span, do: :ok
+        def sample, do: :ok
       end
       """)
     end
   end
 
   test "raises a CompileError when @telemetry is not a keyword list" do
-    assert_raise CompileError, "expected @telemetry to be a keyword list, got: :no_kwlist", fn ->
+    assert_raise CompileError, "expected @telemetry to be a keyword list, got: :sample", fn ->
       Code.compile_string("""
       defmodule Sample do
         use TelemetryAttr
 
-        @telemetry :no_kwlist
-        def no_kwlist, do: :ok
+        @telemetry :sample
+        def sample, do: :ok
       end
       """)
     end
@@ -208,10 +245,84 @@ defmodule TelemetryAttrTest do
         use TelemetryAttr
 
         @telemetry span: [:sample], unknown_option: true
-        def unknown_option, do: :ok
+        def sample, do: :ok
       end
       """)
     end
+  end
+
+  test "raises a CompileError when :span is empty" do
+    assert_raise CompileError, "@telemetry :span cannot be empty", fn ->
+      Code.compile_string("""
+      defmodule Sample do
+        use TelemetryAttr
+
+        @telemetry span: []
+        def sample, do: :ok
+      end
+      """)
+    end
+  end
+
+  test "raises a CompileError when :args contains duplicates" do
+    assert_raise CompileError, "@telemetry :args contains duplicates: [:x]", fn ->
+      Code.compile_string("""
+      defmodule Sample do
+        use TelemetryAttr
+
+        @telemetry span: [:sample], args: [:x, :y, :x]
+        def sample(x, y), do: {x, y}
+      end
+      """)
+    end
+  end
+
+  test "raises a CompileError when :vars contains duplicates" do
+    assert_raise CompileError, "@telemetry :vars contains duplicates: [:count]", fn ->
+      Code.compile_string("""
+      defmodule Sample do
+        use TelemetryAttr
+
+        @telemetry span: [:sample], vars: [:count, :count]
+        def sample do
+          count = 1
+          count
+        end
+      end
+      """)
+    end
+  end
+
+  test "raises a CompileError when @telemetry annotates a defmacro" do
+    assert_raise CompileError,
+                 "@telemetry cannot be used on macro sample/1",
+                 fn ->
+                   Code.compile_string("""
+                   defmodule Sample do
+                     use TelemetryAttr
+
+                     @telemetry span: [:sample]
+                     defmacro sample(x), do: x
+                   end
+                   """)
+                 end
+  end
+
+  test "raises a CompileError when @telemetry annotates a defmacrop" do
+    assert_raise CompileError,
+                 "@telemetry cannot be used on macro sample/1",
+                 fn ->
+                   Code.compile_string("""
+                   defmodule Sample do
+                     use TelemetryAttr
+
+                     @telemetry span: [:sample]
+                     defmacrop sample(x), do: x
+
+                     def sample(x, y), do: sample(x) + y
+                   end
+                   """)
+                 end
   end
 
   test "raises a CompileError when :args is not a list of atoms" do
@@ -221,7 +332,7 @@ defmodule TelemetryAttrTest do
         use TelemetryAttr
 
         @telemetry span: [:sample], args: ["x"]
-        def args(x), do: x
+        def sample(x), do: x
       end
       """)
     end
@@ -234,10 +345,71 @@ defmodule TelemetryAttrTest do
         use TelemetryAttr
 
         @telemetry span: [:sample], vars: ["x"]
-        def vars(x), do: x
+        def sample(x), do: x
       end
       """)
     end
+  end
+
+  test "raises a CompileError when :metadata is not a map with atom keys" do
+    assert_raise CompileError,
+                 "@telemetry :metadata expects a map with atom keys, got: [meta: true]",
+                 fn ->
+                   Code.compile_string("""
+                   defmodule Sample do
+                     use TelemetryAttr
+
+                     @telemetry span: [:sample], metadata: [meta: true]
+                     def sample, do: :ok
+                   end
+                   """)
+                 end
+
+    assert_raise CompileError,
+                 "@telemetry :metadata expects a map with atom keys, got: %{\"meta\" => true}",
+                 fn ->
+                   Code.compile_string("""
+                   defmodule Sample do
+                     use TelemetryAttr
+
+                     @telemetry span: [:sample], metadata: %{"meta" => true}
+                     def sample, do: :ok
+                   end
+                   """)
+                 end
+  end
+
+  test "raises a CompileError when :metadata keys conflict with :args" do
+    assert_raise CompileError,
+                 "@telemetry :metadata key :x conflicts with :args",
+                 fn ->
+                   Code.compile_string("""
+                   defmodule Sample do
+                     use TelemetryAttr
+
+                     @telemetry span: [:sample], args: [:x], metadata: %{x: :overridden}
+                     def sample(x), do: x
+                   end
+                   """)
+                 end
+  end
+
+  test "raises a CompileError when :metadata keys conflict with :vars" do
+    assert_raise CompileError,
+                 "@telemetry :metadata key :count conflicts with :vars",
+                 fn ->
+                   Code.compile_string("""
+                   defmodule Sample do
+                     use TelemetryAttr
+
+                     @telemetry span: [:sample], vars: [:count], metadata: %{count: 0}
+                     def sample do
+                       count = 1
+                       count
+                     end
+                   end
+                   """)
+                 end
   end
 
   test "raises CompileError when @telemetry is declared more than once per function" do
@@ -247,13 +419,138 @@ defmodule TelemetryAttrTest do
         use TelemetryAttr
 
         @telemetry span: [:first]
-        def multiple_attr(1), do: :first
+        def sample(1), do: :first
 
         @telemetry span: [:last]
-        def multiple_attr(x), do: x
+        def sample(x), do: x
       end
       """)
     end
+  end
+
+  test "raises CompileError when @telemetry is declared after the first clause of a function" do
+    assert_raise CompileError,
+                 "@telemetry must be declared before the first clause of sample/1",
+                 fn ->
+                   Code.compile_string("""
+                   defmodule Sample do
+                     use TelemetryAttr
+
+                     def sample(0), do: :zero
+
+                     @telemetry span: [:sample]
+                     def sample(n), do: n
+                   end
+                   """)
+                 end
+  end
+
+  test "raises a CompileError when :args is not a list" do
+    assert_raise CompileError,
+                 "@telemetry :args expects a list of atoms, got: :not_a_list",
+                 fn ->
+                   Code.compile_string("""
+                   defmodule Sample do
+                     use TelemetryAttr
+
+                     @telemetry span: [:sample], args: :not_a_list
+                     def sample(x), do: x
+                   end
+                   """)
+                 end
+  end
+
+  test "raises a CompileError when :vars is not a list" do
+    assert_raise CompileError,
+                 "@telemetry :vars expects a list of atoms, got: :not_a_list",
+                 fn ->
+                   Code.compile_string("""
+                   defmodule Sample do
+                     use TelemetryAttr
+
+                     @telemetry span: [:sample], vars: :not_a_list
+                     def sample(x), do: x
+                   end
+                   """)
+                 end
+  end
+
+  test "raises a CompileError when :span is not a list" do
+    assert_raise CompileError,
+                 "@telemetry :span expects a list of atoms, got: :not_a_list",
+                 fn ->
+                   Code.compile_string("""
+                   defmodule Sample do
+                     use TelemetryAttr
+
+                     @telemetry span: :not_a_list
+                     def sample, do: :ok
+                   end
+                   """)
+                 end
+  end
+
+  test "raises a CompileError when :result_key is not an atom" do
+    assert_raise CompileError,
+                 "@telemetry :result_key expects an atom, got: \"my_result\"",
+                 fn ->
+                   Code.compile_string("""
+                   defmodule Sample do
+                     use TelemetryAttr
+
+                     @telemetry span: [:sample], result_key: "my_result"
+                     def sample, do: :ok
+                   end
+                   """)
+                 end
+  end
+
+  test "raises a CompileError when :result_key conflicts with :metadata" do
+    assert_raise CompileError,
+                 "@telemetry result_key: :foo conflicts with :metadata",
+                 fn ->
+                   Code.compile_string("""
+                   defmodule Sample do
+                     use TelemetryAttr
+
+                     @telemetry span: [:sample], result_key: :foo, metadata: %{foo: 1}
+                     def sample, do: :ok
+                   end
+                   """)
+                 end
+  end
+
+  test "raises a CompileError when :result_key conflicts with :args" do
+    assert_raise CompileError,
+                 "@telemetry result_key: :x conflicts with :args",
+                 fn ->
+                   Code.compile_string("""
+                   defmodule Sample do
+                     use TelemetryAttr
+
+                     @telemetry span: [:sample], result_key: :x, args: [:x]
+                     def sample(x), do: x
+                   end
+                   """)
+                 end
+  end
+
+  test "raises a CompileError when :result_key conflicts with :vars" do
+    assert_raise CompileError,
+                 "@telemetry result_key: :count conflicts with :vars",
+                 fn ->
+                   Code.compile_string("""
+                   defmodule Sample do
+                     use TelemetryAttr
+
+                     @telemetry span: [:sample], result_key: :count, vars: [:count]
+                     def sample do
+                       count = 1
+                       count
+                     end
+                   end
+                   """)
+                 end
   end
 
   defp telemetry_attach(span: span_event_prefix) do
