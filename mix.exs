@@ -1,27 +1,63 @@
 defmodule TelemetryAttr.MixProject do
   use Mix.Project
 
+  @version "1.0.0"
+  @scm_url "https://github.com/supranode/telemetry_attr"
+
   def project do
     [
       app: :telemetry_attr,
-      version: "0.1.0",
+      description: description(),
+      version: @version,
       elixir: "~> 1.17",
-      start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      package: package(),
+      docs: docs()
     ]
   end
 
-  # Run "mix help compile.app" to learn about applications.
+  def cli do
+    [
+      preferred_envs: [docs: :docs]
+    ]
+  end
+
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: []
     ]
   end
 
-  # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:telemetry, "~> 1.3"}
+      {:telemetry, "~> 1.0"},
+
+      # Docs dependencies
+      {:ex_doc, "~> 0.40.3", only: :docs}
+    ]
+  end
+
+  defp description do
+    """
+    Declarative telemetry for Elixir with @telemetry annotations.
+    Add events to your functions without the boilerplate.
+    """
+  end
+
+  defp package do
+    [
+      maintainers: ["Fernando Tapia Rico"],
+      licenses: ["MIT"],
+      links: %{"GitHub" => @scm_url},
+      files: ~w(mix.exs README.md lib)
+    ]
+  end
+
+  defp docs do
+    [
+      source_ref: "v#{@version}",
+      main: "TelemetryAttr",
+      source_url: @scm_url
     ]
   end
 end
